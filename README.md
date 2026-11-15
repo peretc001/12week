@@ -1,4 +1,29 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 12 недель
+
+Трекер целей на 12-недельный цикл. Дата первой недели, тема, цели, пункты и
+выполнение хранятся в Supabase; демоданные не создаются.
+
+## Подключение Supabase
+
+1. Создайте проект в Supabase.
+2. Убедитесь, что в `Authentication → Providers` включён вход по Email.
+3. В `Authentication → URL Configuration` добавьте адрес приложения в Site URL
+   и Redirect URLs — это нужно для подтверждения почты и восстановления пароля.
+4. Примените миграцию из `supabase/migrations` через Supabase CLI или SQL Editor.
+5. Скопируйте `.env.example` в `.env.local` и заполните URL и publishable key.
+
+Если приложение уже запускалось с анонимной авторизацией, для сохранения этих
+данных при регистрации включите `Allow manual linking` в настройках Auth.
+
+```bash
+cp .env.example .env.local
+```
+
+Не используйте secret/service-role key в `NEXT_PUBLIC_` переменных.
+
+Если начальная миграция уже была применена раньше, примените и последующие
+миграции по порядку. `20261115000000_goal_item_scheduled_date.sql` добавляет
+необязательную дату пунктам и переносит её вместе с датой 12-недельного цикла.
 
 ## Getting Started
 

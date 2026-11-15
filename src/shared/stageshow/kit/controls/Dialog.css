@@ -1,0 +1,45 @@
+@layer stageshow {
+  .ss-dialog__backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 100;
+    display: grid;
+    place-items: center;
+    padding: 40px;
+    background: color-mix(in srgb, var(--ss-well) 62%, transparent);
+    backdrop-filter: blur(8px);
+  }
+
+  .ss-dialog {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    width: min(980px, calc(100% - 80px));
+    max-height: calc(100% - 60px);
+    overflow: hidden;
+    border-radius: calc(var(--ss-radius-window) + 4px);
+    color: var(--ss-text-strong);
+    background: var(--ss-raised);
+    box-shadow: var(--ss-shadow-hero);
+  }
+
+  .ss-dialog__header,
+  .ss-dialog__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 22px 26px;
+  }
+
+  .ss-dialog__header { border-bottom: 1px solid var(--ss-line); }
+  .ss-dialog__footer { justify-content: flex-end; border-top: 1px solid var(--ss-line); }
+  .ss-dialog__body {
+    min-height: 0;
+    padding: 24px 26px 26px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .ss-dialog__title { font: 700 24px/1.2 var(--ss-font); letter-spacing: -.025em; }
+  .ss-dialog__subtitle { margin-top: 5px; color: var(--ss-text); font: 500 13px/1.35 var(--ss-font); }
+}
