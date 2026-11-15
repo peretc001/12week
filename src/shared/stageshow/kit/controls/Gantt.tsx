@@ -1,4 +1,5 @@
-import type { CSSProperties } from 'react'
+import { useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { Icon } from '../parts/Icon'
 import { StarMark } from '../parts/StarMark'
 import './Gantt.css'
 
@@ -30,14 +31,64 @@ export interface GanttProps {
   onWeekSelect?: (week: number) => void
   onRowSelect?: (row: GanttRow) => void
   onTogglePrimary?: (row: GanttRow) => void
+  onReorder?: (from: number, to: number) => void
   weeks?: number
   columns?: GanttColumn[]
   cornerLabel?: string
 }
 
-export function Gantt({ rows, selectedWeek, onWeekSelect, onRowSelect, onTogglePrimary, weeks = 12, columns, cornerLabel = 'Цели / задачи' }: GanttProps) {
+function clampGanttDrop(rows: GanttRow[], from: number, to: number) {
+  const primaryCount = rows.filter((row) => row.primary).length
+  if (rows[from]?.primary) return Math.max(0, Math.min(to, Math.max(primaryCount - 1, 0)))
+  return Math.max(primaryCount, Math.min(to, rows.length - 1))
+}
+
+function reorderRows(rows: GanttRow[], from: number, to: number) {
+  const next = [...rows]
+  const [row] = next.splice(from, 1)
+  next.splice(to, 0, row)
+  return next
+}
+
+export function Gantt({ rows, selectedWeek, onWeekSelect, onRowSelect, onTogglePrimary, onReorder, weeks = 12, columns, cornerLabel = 'Цели / задачи' }: GanttProps) {
+  const [drag, setDrag] = useState<{ from: number; to: number } | null>(null)
   const columnItems: GanttColumn[] = columns ?? Array.from({ length: weeks }, (_, index) => ({ id: String(index + 1), label: `Н${index + 1}` }))
   const columnCount = columnItems.length
+  const shownRows = drag ? reorderRows(rows, drag.from, drag.to) : rows
+
+  const startDrag = (index: number, event: ReactPointerEvent<HTMLElement>) => {
+    if (!onReorder || event.button !== 0) return
+    if ((event.target as HTMLElement).closest('.ss-gantt__star')) return
+    if ((event.target as HTMLElement).closest('.ss-gantt__grip')) event.preventDefault()
+    const rowHeight = event.currentTarget.closest('.ss-gantt')?.querySelector('.ss-gantt__label')?.getBoundingClientRect().height ?? 94
+    const startY = event.clientY
+    let to = index
+    let moved = false
+    const move = (pointer: PointerEvent) => {
+      const next = clampGanttDrop(rows, index, index + Math.round((pointer.clientY - startY) / rowHeight))
+      if (next !== index) moved = true
+      if (next !== to) {
+        to = next
+        setDrag({ from: index, to })
+      }
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      setDrag(null)
+      if (!moved) return
+      const stopClick = (click: MouseEvent) => {
+        click.preventDefault()
+        click.stopPropagation()
+        window.removeEventListener('click', stopClick, true)
+      }
+      window.addEventListener('click', stopClick, true)
+      if (to !== index) onReorder(index, to)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   return (
     <div className="ss-gantt" style={{ '--ss-gantt-weeks': columnCount, '--ss-gantt-rows': Math.max(rows.length, 1) } as CSSProperties}>
       <div className="ss-gantt__corner">{cornerLabel}</div>
@@ -51,8 +102,19 @@ export function Gantt({ rows, selectedWeek, onWeekSelect, onRowSelect, onToggleP
         ))}
       </div>
       <div className="ss-gantt__labels">
-        {rows.map((row) => (
-          <div key={row.id} className="ss-gantt__label" data-primary={row.primary || undefined}>
+        {shownRows.map((row) => (
+          <div key={row.id} className="ss-gantt__label" data-primary={row.primary || undefined} data-dragging={drag?.from !== undefined && rows[drag.from]?.id === row.id || undefined}>
+            {onReorder && (
+              <button
+                type="button"
+                className="ss-gantt__grip"
+                aria-label={`Переместить цель ${row.title}`}
+                title={row.primary ? 'Важные задачи остаются выше обычных' : 'Переместить'}
+                onPointerDown={(event) => startDrag(rows.findIndex((candidate) => candidate.id === row.id), event)}
+              >
+                <Icon name="grip" size={14} />
+              </button>
+            )}
             {onTogglePrimary && (
               <button
                 type="button"
@@ -72,7 +134,7 @@ export function Gantt({ rows, selectedWeek, onWeekSelect, onRowSelect, onToggleP
       </div>
       <div className="ss-gantt__timeline">
         <span className="ss-gantt__selection" style={{ left: `${((selectedWeek - 1) / columnCount) * 100}%`, width: `${100 / columnCount}%` }} />
-        {rows.flatMap((row, index) => {
+        {shownRows.flatMap((row, index) => {
           const segments = row.segments ?? [{ startWeek: row.startWeek, endWeek: row.endWeek }]
           return segments.map((segment, segmentIndex) => (
           <button
@@ -81,6 +143,7 @@ export function Gantt({ rows, selectedWeek, onWeekSelect, onRowSelect, onToggleP
             className="ss-gantt__bar"
             data-tone={row.tone ?? 'accent'}
             data-primary={row.primary || undefined}
+            data-dragging={drag && rows[drag.from]?.id === row.id || undefined}
             data-segmented={row.progressSegments ? true : undefined}
             title={row.title}
             style={{
@@ -89,6 +152,7 @@ export function Gantt({ rows, selectedWeek, onWeekSelect, onRowSelect, onToggleP
               width: `calc(${((segment.endWeek - segment.startWeek + 1) / columnCount) * 100}% - 10px)`,
               '--ss-gantt-progress': `${Math.min(100, Math.max(0, row.progress ?? 0))}%`,
             } as CSSProperties}
+            onPointerDown={(event) => onReorder && startDrag(rows.findIndex((candidate) => candidate.id === row.id), event)}
             onClick={() => onRowSelect?.({ ...row, startWeek: segment.startWeek, endWeek: segment.endWeek })}
           >
             {row.progressSegments?.map((progressSegment, progressSegmentIndex) => {
@@ -109,7 +173,7 @@ export function Gantt({ rows, selectedWeek, onWeekSelect, onRowSelect, onToggleP
           </button>
           ))
         })}
-        {rows.flatMap((row, index) => (row.marks ?? []).map((day) => (
+        {shownRows.flatMap((row, index) => (row.marks ?? []).map((day) => (
           <span
             key={`${row.id}-mark-${day}`}
             className="ss-gantt__mark"

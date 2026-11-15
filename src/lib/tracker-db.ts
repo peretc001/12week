@@ -336,3 +336,18 @@ export async function setGoalTone(id: string, tone: GoalTone) {
   const database = await getDatabase()
   await database.execute('update goals set tone = $1, updated_at = $2 where id = $3', [tone, nowIso(), id])
 }
+
+export async function saveGoalOrder(ids: string[]) {
+  const database = await getDatabase()
+  const timestamp = nowIso()
+  await database.execute('BEGIN')
+  try {
+    for (const [index, id] of ids.entries()) {
+      await database.execute('update goals set sort_order = $1, updated_at = $2 where id = $3', [index, timestamp, id])
+    }
+    await database.execute('COMMIT')
+  } catch (error) {
+    await database.execute('ROLLBACK')
+    throw error
+  }
+}

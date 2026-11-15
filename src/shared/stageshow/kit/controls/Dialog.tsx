@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { Icon } from '../parts/Icon'
 import { Button } from './Button'
 import './Dialog.css'
@@ -14,6 +14,18 @@ export interface DialogProps {
 }
 
 export function Dialog({ open, title, subtitle, children, footer, onClose, className }: DialogProps) {
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (document.querySelector('.ant-picker-dropdown:not(.ant-picker-dropdown-hidden)')) return
+      event.preventDefault()
+      onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [open, onClose])
+
   if (!open) return null
 
   return (

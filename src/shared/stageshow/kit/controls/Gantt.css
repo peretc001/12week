@@ -78,6 +78,23 @@
     text-overflow: ellipsis;
     cursor: pointer;
   }
+  .ss-gantt__grip {
+    appearance: none;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 18px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    color: var(--ss-icon-faint);
+    background: transparent;
+    cursor: grab;
+  }
+  .ss-gantt__grip:active { cursor: grabbing; }
+  .ss-gantt__label[data-dragging] { opacity: 0.55; }
+  .ss-gantt__bar[data-dragging] { opacity: 0.72; cursor: grabbing; }
+
   .ss-gantt__star {
     appearance: none;
     -webkit-appearance: none;

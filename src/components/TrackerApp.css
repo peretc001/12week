@@ -101,14 +101,37 @@
 .type-settings-card .ss-row + .ss-row { border-top: 1px solid var(--ss-line-faint); }
 .goal-items-editor { display: grid; gap: 12px; }
 .goal-item-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto 30px; align-items: end; gap: 8px; }
-.goal-item-date.ant-picker { width: 40px; height: 38px; padding-inline: 10px; border-color: var(--ss-ink-4); background: var(--ss-surface); transition: width 160ms ease, border-color 160ms ease; }
+.goal-item-editor[data-draggable] { grid-template-columns: 22px minmax(0, 1fr) auto 30px; column-gap: 4px; }
+.goal-items-editor .goal-item-editor__handle {
+  appearance: none;
+  -webkit-appearance: none;
+  display: grid;
+  place-items: center;
+  align-self: end;
+  width: 22px;
+  height: var(--ss-control);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  box-shadow: none;
+  color: var(--ss-icon-faint);
+  background: transparent;
+  font: inherit;
+  line-height: 0;
+  cursor: grab;
+}
+.goal-items-editor .goal-item-editor__handle:hover { color: var(--ss-text); background: var(--ss-ink-2); }
+.goal-items-editor .goal-item-editor__handle:active { cursor: grabbing; }
+.goal-item-editor[data-dragging] { opacity: 0.55; }
+.goal-item-date.ant-picker { width: 40px; height: var(--ss-control); padding-inline: 10px; border-color: var(--ss-ink-4); background: var(--ss-surface); transition: width 160ms ease, border-color 160ms ease; }
 .goal-item-date--filled.ant-picker { width: 104px; }
 .goal-item-date.ant-picker:hover, .goal-item-date.ant-picker-focused { border-color: var(--ss-accent); }
 .goal-item-date .ant-picker-input > input { min-width: 0; color: var(--ss-text-strong); font-size: 12px; }
 .goal-item-date:not(.goal-item-date--filled) .ant-picker-input > input { width: 0; }
 .goal-item-date .ant-picker-suffix { color: var(--ss-text-faint); }
 .goal-item-date .ant-picker-clear { color: var(--ss-text); background: var(--ss-surface); }
-.goal-item-editor__remove { display: grid; place-items: center; width: 30px; height: 38px; padding: 0; color: var(--ss-text); }
+.goal-item-editor__remove { display: grid; place-items: center; width: 30px; height: var(--ss-control); padding: 0; color: var(--ss-text); }
 .goal-items-editor > .ss-button { justify-self: start; }
 .goal-dialog-main > .ss-badge { margin-top: 12px; }
 .goal-delete-control { position: relative; margin-right: auto; }

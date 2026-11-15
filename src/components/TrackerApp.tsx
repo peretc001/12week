@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { ConfigProvider, DatePicker, theme as antdTheme } from 'antd'
 import ruRU from 'antd/locale/ru_RU'
 import dayjs from 'dayjs'
@@ -12,7 +12,7 @@ import {
 import { StarMark } from '@/shared/stageshow/kit/parts/StarMark'
 import type { Goal, GoalItem, GoalOccurrence, GoalType } from '@/types/database'
 import {
-  createGoalRecord, deleteGoalRecord, loadStoredGoals, loadTracker, saveTheme, setGoalTone,
+  createGoalRecord, deleteGoalRecord, loadStoredGoals, loadTracker, saveGoalOrder, saveTheme, setGoalTone,
   setItemCompleted, setOccurrenceCompleted, shiftCycle, updateGoalRecord, type AppTheme,
 } from '@/lib/tracker-db'
 import './TrackerApp.css'
@@ -183,12 +183,19 @@ function isGoalCompleted(goal: Goal) {
 function isPrimaryGoal(goal: Goal) {
   return goal.tone === 'violet'
 }
-function itemsInCreationOrder(items: GoalItem[]) {
-  return [...items].sort((first, second) => first.created_at.localeCompare(second.created_at) || first.sort_order - second.sort_order)
+function itemsInListOrder(items: GoalItem[]) {
+  return [...items].sort((first, second) => first.sort_order - second.sort_order || first.created_at.localeCompare(second.created_at))
 }
-function compareWeekGoals(first: Goal, second: Goal, completed: (goal: Goal) => boolean) {
-  const rank = (goal: Goal) => (isPrimaryGoal(goal) ? 0 : completed(goal) ? 2 : 1)
-  return rank(first) - rank(second) || first.sort_order - second.sort_order
+function compareWeekGoals(first: Goal, second: Goal) {
+  const rank = (goal: Goal) => (isPrimaryGoal(goal) ? 0 : 1)
+  return rank(first) - rank(second) || first.sort_order - second.sort_order || first.created_at.localeCompare(second.created_at)
+}
+function reorderList<T>(items: T[], from: number, to: number) {
+  if (from === to || from < 0 || to < 0 || from >= items.length || to >= items.length) return items
+  const next = [...items]
+  const [item] = next.splice(from, 1)
+  next.splice(to, 0, item)
+  return next
 }
 function PrimaryStar({ active, title, onClick }: { active: boolean; title: string; onClick: () => void }) {
   return (
@@ -247,10 +254,11 @@ export function TrackerApp() {
   const [savingGoal, setSavingGoal] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deletingGoal, setDeletingGoal] = useState(false)
+  const [draftDragIndex, setDraftDragIndex] = useState<number | null>(null)
 
   const loadGoals = useCallback(async () => {
     const data = await loadStoredGoals()
-    setGoals(data.map((goal) => ({ ...goal, goal_items: itemsInCreationOrder(goal.goal_items ?? []) })))
+    setGoals(data.map((goal) => ({ ...goal, goal_items: itemsInListOrder(goal.goal_items ?? []) })))
   }, [])
 
   useEffect(() => {
@@ -265,7 +273,7 @@ export function TrackerApp() {
         const currentSelection = currentCycleSelection(snapshot.firstWeekDate)
         setSelectedWeek(currentSelection.week)
         setSelectedDay(currentSelection.day)
-        setGoals(snapshot.goals.map((goal) => ({ ...goal, goal_items: itemsInCreationOrder(goal.goal_items ?? []) })))
+        setGoals(snapshot.goals.map((goal) => ({ ...goal, goal_items: itemsInListOrder(goal.goal_items ?? []) })))
         document.documentElement.dataset.theme = snapshot.theme
       } catch (error) {
         if (active) setMessage(error instanceof Error ? error.message : 'Не удалось загрузить данные')
@@ -295,12 +303,10 @@ export function TrackerApp() {
   const isCompletedForSelectedWeek = (goal: Goal) => goal.type === 'recurring'
     ? areUnitsCompleted(goal.goal_occurrences.filter((occurrence) => occurrence.scheduled_date >= selectedWeekStart && occurrence.scheduled_date <= selectedWeekEnd))
     : isGoalCompleted(goal)
-  const orderedWeekGoals = useMemo(() => {
-    const completed = (goal: Goal) => goal.type === 'recurring'
-      ? areUnitsCompleted(goal.goal_occurrences.filter((occurrence) => occurrence.scheduled_date >= selectedWeekStart && occurrence.scheduled_date <= selectedWeekEnd))
-      : isGoalCompleted(goal)
-    return [...weekGoals].sort((first, second) => compareWeekGoals(first, second, completed))
-  }, [weekGoals, selectedWeekStart, selectedWeekEnd])
+  const orderedWeekGoals = useMemo(
+    () => [...weekGoals].sort(compareWeekGoals),
+    [weekGoals],
+  )
   const ganttRows = useMemo<GanttRow[]>(() => orderedWeekGoals.map((goal) => {
     const range = goalDayRange(goal, selectedWeek, cycleStart)
     const visibleOccurrences = goal.goal_occurrences.filter((occurrence) => occurrence.scheduled_date >= selectedWeekStart && occurrence.scheduled_date <= selectedWeekEnd)
@@ -390,7 +396,7 @@ export function TrackerApp() {
   const openCreateGoal = () => { resetGoalForm(); setDialogOpen(true) }
   const closeGoalDialog = () => { setDialogOpen(false); resetGoalForm() }
   const openGoalEditor = (goal: Goal) => {
-    const sortedItems = itemsInCreationOrder(goal.goal_items)
+    const sortedItems = itemsInListOrder(goal.goal_items)
     const legacyStart = weekStartIso(goal.week_number, cycleStart)
     const hasRange = goal.start_date === undefined ? true : Boolean(goal.start_date && goal.end_date)
     const startDate = goal.start_date ?? legacyStart
@@ -561,6 +567,56 @@ export function TrackerApp() {
       setMessage('Не удалось сохранить главную задачу')
     }
   }
+  const reorderWeekGoals = async (from: number, to: number) => {
+    if (from === to) return
+    const nextWeek = reorderList(orderedWeekGoals, from, to)
+    const weekIds = new Set(orderedWeekGoals.map((goal) => goal.id))
+    const global = [...goals].sort(compareWeekGoals)
+    const slots: number[] = []
+    global.forEach((goal, index) => { if (weekIds.has(goal.id)) slots.push(index) })
+    const nextGlobal = [...global]
+    slots.forEach((slot, index) => { nextGlobal[slot] = nextWeek[index] })
+    const order = new Map(nextGlobal.map((goal, index) => [goal.id, index]))
+    const previous = goals
+    setGoals((current) => current.map((goal) => order.has(goal.id) ? { ...goal, sort_order: order.get(goal.id)! } : goal))
+    try {
+      await saveGoalOrder(nextGlobal.map((goal) => goal.id))
+    } catch {
+      setGoals(previous)
+      setMessage('Не удалось сохранить порядок')
+    }
+  }
+  const moveDraftItem = (from: number, to: number) => {
+    if (from === to) return
+    setNewGoalItems((items) => reorderList(items, from, to))
+    setNewGoalItemDates((dates) => reorderList(dates, from, to))
+    setGoalItemIds((ids) => reorderList(ids, from, to))
+  }
+  const draftDragIndexRef = useRef(0)
+  const startDraftDrag = (from: number, event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const height = event.currentTarget.closest('.goal-item-editor')?.getBoundingClientRect().height ?? 48
+    const startY = event.clientY
+    draftDragIndexRef.current = from
+    setDraftDragIndex(from)
+    const move = (pointer: PointerEvent) => {
+      const count = newGoalItems.length
+      const next = Math.max(0, Math.min(count - 1, from + Math.round((pointer.clientY - startY) / height)))
+      const current = draftDragIndexRef.current
+      if (next === current) return
+      draftDragIndexRef.current = next
+      setDraftDragIndex(next)
+      moveDraftItem(current, next)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      setDraftDragIndex(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
 
   return (
     <ConfigProvider
@@ -617,7 +673,7 @@ export function TrackerApp() {
                   ) : message && !goals.length ? (
                     <Card className="tracker-state" tone="sunken"><Icon name="gear" size={22} /><strong>Не удалось открыть данные</strong><small>{message}</small></Card>
                   ) : weekGoals.length ? (
-                    <Gantt columns={weekColumns} cornerLabel="Цели недели" rows={ganttRows} selectedWeek={selectedDay} onWeekSelect={setSelectedDay} onRowSelect={(row) => setSelectedDay(row.startWeek)} onTogglePrimary={(row) => void togglePrimaryGoal(row.id)} />
+                    <Gantt columns={weekColumns} cornerLabel="Цели недели" rows={ganttRows} selectedWeek={selectedDay} onWeekSelect={setSelectedDay} onRowSelect={(row) => setSelectedDay(row.startWeek)} onTogglePrimary={(row) => void togglePrimaryGoal(row.id)} onReorder={(from, to) => void reorderWeekGoals(from, to)} />
                   ) : (
                     <Card className="tracker-state" tone="sunken"><Icon name="calendar" size={22} /><strong>Неделя пока пустая</strong><small>Добавьте первую цель на эту неделю.</small><Button size="large" variant="primary" icon={<Icon name="plus" size={15} />} onClick={openCreateGoal}>Добавить цель</Button></Card>
                   )}
@@ -671,7 +727,7 @@ export function TrackerApp() {
                           </div>
                         </div>
                         <div className="goal-card__items">
-                          {goal.goal_items.length ? itemsInCreationOrder(goal.goal_items).map((item) => (
+                          {goal.goal_items.length ? itemsInListOrder(goal.goal_items).map((item) => (
                             <Checkbox
                               key={item.id}
                               checked={Boolean(item.completed_at)}
@@ -739,7 +795,12 @@ export function TrackerApp() {
                   <Card tone="sunken" className="type-settings-card">
                     <div className="goal-items-editor">
                       {newGoalItems.map((item, index) => (
-                        <div className="goal-item-editor" key={index}>
+                        <div className="goal-item-editor" key={index} data-draggable={newGoalItems.length > 1 || undefined} data-dragging={draftDragIndex === index || undefined}>
+                          {newGoalItems.length > 1 && (
+                            <button type="button" className="goal-item-editor__handle" aria-label={`Переместить пункт ${index + 1}`} onPointerDown={(event) => startDraftDrag(index, event)}>
+                              <Icon name="grip" size={14} />
+                            </button>
+                          )}
                           <Field
                             label={goalType === 'structured' ? `Этап или пункт ${index + 1}` : `Пункт ${index + 1}`}
                             value={item}
