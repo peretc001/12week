@@ -7,21 +7,21 @@ import dayjs from 'dayjs'
 import 'dayjs/locale/ru'
 import {
   Badge, Button, Card, Checkbox, Dialog, Field, Gantt, Icon, Meter, Row,
-  Popover, Segmented, Select, Spinner, Stage, type GanttColumn, type GanttRow, type Theme,
+  Popover, Segmented, Select, Spinner, Stage, type GanttColumn, type GanttRow,
 } from '@/shared/stageshow/kit'
-import { createClient, isSupabaseConfigured } from '@/lib/supabase/client'
 import { StarMark } from '@/shared/stageshow/kit/parts/StarMark'
-import type { Goal, GoalItem, GoalOccurrence, GoalType, Settings } from '@/types/database'
-import { AuthScreen, type AuthMode } from '@/components/AuthScreen'
+import type { Goal, GoalItem, GoalOccurrence, GoalType } from '@/types/database'
+import {
+  createGoalRecord, deleteGoalRecord, loadStoredGoals, loadTracker, saveTheme, setGoalTone,
+  setItemCompleted, setOccurrenceCompleted, shiftCycle, updateGoalRecord, type AppTheme,
+} from '@/lib/tracker-db'
 import './TrackerApp.css'
 
 dayjs.locale('ru')
 
-const themeOptions: { value: Theme; label: string }[] = [
-  { value: 'light', label: 'Светлая' },
-  { value: 'dark', label: 'Тёмная' },
-  { value: 'blueprint', label: 'Blueprint' },
-  { value: 'glass', label: 'Стекло' },
+const themeOptions: { value: AppTheme; label: string }[] = [
+  { value: 'light', label: 'Белая' },
+  { value: 'dark', label: 'Чёрная' },
 ]
 const categoryOptions = [
   { value: 'health', label: 'Здоровье' },
@@ -48,11 +48,6 @@ function isoFromDate(date: Date) {
 function currentDateIso() {
   const now = new Date()
   return isoFromDate(new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())))
-}
-function currentMondayIso() {
-  const today = dateFromIso(currentDateIso())
-  const day = (today.getUTCDay() + 6) % 7
-  return isoFromDate(new Date(today.getTime() - day * dayMs))
 }
 function formatInputDate(iso: string) {
   const date = dateFromIso(iso)
@@ -220,11 +215,7 @@ function GoalTypeCard({ active, disabled = false, title, description, icon, onCl
 }
 
 export function TrackerApp() {
-  const [theme, setTheme] = useState<Theme>('light')
-  const [userId, setUserId] = useState<string | null>(null)
-  const [authRequired, setAuthRequired] = useState(false)
-  const [authMode, setAuthMode] = useState<AuthMode>('signin')
-  const [authVersion, setAuthVersion] = useState(0)
+  const [theme, setTheme] = useState<AppTheme>('light')
   const [goals, setGoals] = useState<Goal[]>([])
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
@@ -258,73 +249,33 @@ export function TrackerApp() {
   const [deletingGoal, setDeletingGoal] = useState(false)
 
   const loadGoals = useCallback(async () => {
-    const supabase = createClient()
-    if (!supabase) return
-    const { data, error } = await supabase.from('goals').select('*, goal_items(*), goal_occurrences(*)').is('archived_at', null).order('sort_order')
-    if (error) throw error
-    setGoals(((data ?? []) as Goal[]).map((goal) => ({ ...goal, goal_items: itemsInCreationOrder(goal.goal_items ?? []) })))
+    const data = await loadStoredGoals()
+    setGoals(data.map((goal) => ({ ...goal, goal_items: itemsInCreationOrder(goal.goal_items ?? []) })))
   }, [])
 
   useEffect(() => {
     let active = true
     async function bootstrap() {
-      if (!isSupabaseConfigured()) {
-        setMessage('Добавьте NEXT_PUBLIC_SUPABASE_URL и NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY в .env.local')
-        setAuthMode('signin')
-        setAuthRequired(true)
-        setLoading(false)
-        return
-      }
-      const supabase = createClient()!
       try {
-        const defaultStart = currentMondayIso()
-        const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
-        if (sessionError) throw sessionError
-        const user = sessionData.session?.user ?? null
-        if (!user) {
-          if (active) { setAuthMode('signin'); setAuthRequired(true) }
-          return
-        }
-        if (user.is_anonymous) {
-          if (active) { setAuthMode('signup'); setAuthRequired(true) }
-          return
-        }
-        if (user.user_metadata?.needs_password) {
-          if (active) { setAuthMode('reset'); setAuthRequired(true) }
-          return
-        }
-        if (new URLSearchParams(window.location.search).has('recovery')) {
-          if (active) { setAuthMode('reset'); setAuthRequired(true) }
-          return
-        }
+        const snapshot = await loadTracker()
         if (!active) return
-        setAuthRequired(false)
-        setUserId(user.id)
-        const { data: storedSettings, error: settingsError } = await supabase.from('settings').select('*').eq('user_id', user.id).maybeSingle()
-        if (settingsError) throw settingsError
-        let settings = storedSettings as Settings | null
-        if (!settings) {
-          const { data, error } = await supabase.from('settings').insert({ user_id: user.id, first_week_date: defaultStart, theme: 'light' }).select().single()
-          if (error) throw error
-          settings = data as Settings
-        }
-        setTheme(settings.theme)
-        setCycleStart(settings.first_week_date)
-        setCycleStartDraft(formatInputDate(settings.first_week_date))
-        const currentSelection = currentCycleSelection(settings.first_week_date)
+        setTheme(snapshot.theme)
+        setCycleStart(snapshot.firstWeekDate)
+        setCycleStartDraft(formatInputDate(snapshot.firstWeekDate))
+        const currentSelection = currentCycleSelection(snapshot.firstWeekDate)
         setSelectedWeek(currentSelection.week)
         setSelectedDay(currentSelection.day)
-        document.documentElement.dataset.theme = settings.theme
-        await loadGoals()
+        setGoals(snapshot.goals.map((goal) => ({ ...goal, goal_items: itemsInCreationOrder(goal.goal_items ?? []) })))
+        document.documentElement.dataset.theme = snapshot.theme
       } catch (error) {
-        if (active) setMessage(error instanceof Error ? error.message : 'Не удалось загрузить данные из Supabase')
+        if (active) setMessage(error instanceof Error ? error.message : 'Не удалось загрузить данные')
       } finally {
         if (active) setLoading(false)
       }
     }
     void bootstrap()
     return () => { active = false }
-  }, [authVersion, loadGoals])
+  }, [])
 
   useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])
 
@@ -397,14 +348,16 @@ export function TrackerApp() {
   const cycleProgress = goals.length ? Math.round(goals.reduce((sum, goal) => sum + goalProgress(goal), 0) / goals.length) : 0
 
   const selectWeek = (week: number) => { setSelectedWeek(Math.min(12, Math.max(1, week))); setSelectedDay(1) }
-  const changeTheme = async (nextTheme: Theme) => {
+  const changeTheme = async (nextTheme: AppTheme) => {
     const previous = theme
     setTheme(nextTheme)
     setMessage('')
-    const supabase = createClient()
-    if (!supabase || !userId) return
-    const { error } = await supabase.from('settings').update({ theme: nextTheme }).eq('user_id', userId)
-    if (error) { setTheme(previous); setMessage('Не удалось сохранить тему') }
+    try {
+      await saveTheme(nextTheme)
+    } catch {
+      setTheme(previous)
+      setMessage('Не удалось сохранить тему')
+    }
   }
   const openCycleSettings = () => {
     setCycleStartDraft(formatInputDate(cycleStart)); setCycleDateError(false); setCycleSaveError(''); setCycleSettingsOpen(true)
@@ -412,52 +365,12 @@ export function TrackerApp() {
   const saveCycleSettings = async () => {
     const parsed = parseInputDate(cycleStartDraft)
     if (!parsed) { setCycleDateError(true); setCycleSaveError(''); return }
-    const supabase = createClient()
-    if (!supabase || !userId) return
     setCycleSaveError('')
-    let { error } = await supabase.rpc('update_first_week_date', { p_first_week_date: parsed })
-
-    const rpcIsMissing = error && (
-      error.code === 'PGRST202' ||
-      error.code === '42883' ||
-      error.message.toLowerCase().includes('update_first_week_date')
-    )
-
-    if (rpcIsMissing) {
-      const dateShift = (dateFromIso(parsed).getTime() - dateFromIso(cycleStart).getTime()) / dayMs
-      const occurrenceUpdates = goals.flatMap((goal) => goal.goal_occurrences.map((occurrence) => {
-        return {
-          id: occurrence.id,
-          scheduled_date: dateWithOffset(occurrence.scheduled_date, dateShift),
-        }
-      }))
-      const updateResults = await Promise.all(occurrenceUpdates.map((occurrence) => (
-        supabase.from('goal_occurrences').update({ scheduled_date: occurrence.scheduled_date }).eq('id', occurrence.id)
-      )))
-      error = updateResults.find((result) => result.error)?.error ?? null
-      if (!error) {
-        const itemUpdates = goals.flatMap((goal) => goal.goal_items
-          .filter((item) => item.scheduled_date)
-          .map((item) => ({ id: item.id, scheduled_date: dateWithOffset(item.scheduled_date!, dateShift) })))
-        const itemResults = await Promise.all(itemUpdates.map((item) => (
-          supabase.from('goal_items').update({ scheduled_date: item.scheduled_date }).eq('id', item.id)
-        )))
-        error = itemResults.find((result) => result.error)?.error ?? null
-      }
-      if (!error) {
-        const rangeResults = await Promise.all(goals.filter((goal) => goal.start_date && goal.end_date).map((goal) => (
-          supabase.from('goals').update({ start_date: dateWithOffset(goal.start_date!, dateShift), end_date: dateWithOffset(goal.end_date!, dateShift) }).eq('id', goal.id)
-        )))
-        error = rangeResults.find((result) => result.error)?.error ?? null
-      }
-      if (!error) {
-        const settingsResult = await supabase.from('settings').update({ first_week_date: parsed }).eq('user_id', userId)
-        error = settingsResult.error
-      }
-    }
-
-    if (error) {
-      setCycleSaveError(`Не удалось сохранить дату: ${error.message}`)
+    const dateShift = Math.round((dateFromIso(parsed).getTime() - dateFromIso(cycleStart).getTime()) / dayMs)
+    try {
+      await shiftCycle(parsed, dateShift)
+    } catch (error) {
+      setCycleSaveError(`Не удалось сохранить дату: ${error instanceof Error ? error.message : 'ошибка записи'}`)
       return
     }
     await loadGoals().catch(() => undefined)
@@ -531,34 +444,31 @@ export function TrackerApp() {
       date < (dateRange.startDate ?? cycleStart) || date > (dateRange.endDate ?? dateWithOffset(cycleStart, 83))
     ))
     if (datedItemOutsideRange) { setGoalFormError('Дата пункта должна быть в пределах периода цели'); return }
-    const supabase = createClient()
-    if (!supabase || !userId) return
     setSavingGoal(true); setGoalFormError('')
-    const { data, error } = await supabase.from('goals').insert({
-      user_id: userId, week_number: selectedWeek, type: goalType, title, category: newGoalCategory,
-      tone: 'accent', start_day: 1, end_day: 7, start_date: dateRange.startDate, end_date: dateRange.endDate, sort_order: goals.length,
-    }).select().single()
-    if (error || !data) { setGoalFormError(error?.message ?? 'Не удалось создать цель'); setSavingGoal(false); return }
-    let childError: { message: string } | null = null
-    if (goalType === 'recurring') {
-      const rangeStart = dateRange.startDate ?? cycleStart
-      const rangeEnd = dateRange.endDate ?? dateWithOffset(cycleStart, 83)
-      const occurrences = recurringDates(selectedDays, rangeStart, rangeEnd).map((scheduledDate) => ({ goal_id: data.id, scheduled_date: scheduledDate }))
-      if (occurrences.length) childError = (await supabase.from('goal_occurrences').insert(occurrences)).error
-    } else {
-      const items = newGoalItems
-        .map((item, index) => ({ title: item.trim(), scheduled_date: newGoalItemDates[index] ?? null }))
-        .filter((item) => item.title)
-        .map((item, index) => ({ goal_id: data.id, ...item, sort_order: index }))
-      if (items.length) childError = (await supabase.from('goal_items').insert(items)).error
+    const rangeStart = dateRange.startDate ?? cycleStart
+    const rangeEnd = dateRange.endDate ?? dateWithOffset(cycleStart, 83)
+    try {
+      await createGoalRecord({
+        weekNumber: selectedWeek,
+        type: goalType,
+        title,
+        category: newGoalCategory,
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+        sortOrder: goals.length,
+        occurrenceDates: goalType === 'recurring' ? recurringDates(selectedDays, rangeStart, rangeEnd) : [],
+        items: goalType === 'recurring' ? [] : newGoalItems
+          .map((item, index) => ({ title: item.trim(), scheduledDate: newGoalItemDates[index] ?? null }))
+          .filter((item) => item.title),
+      })
+      await loadGoals()
+      setDialogOpen(false)
+      resetGoalForm()
+    } catch (error) {
+      setGoalFormError(error instanceof Error ? error.message : 'Не удалось создать цель')
+    } finally {
+      setSavingGoal(false)
     }
-    if (childError) {
-      await supabase.from('goals').delete().eq('id', data.id)
-      setGoalFormError(childError.message); setSavingGoal(false); return
-    }
-    try { await loadGoals(); setDialogOpen(false); resetGoalForm() }
-    catch (loadError) { setMessage(loadError instanceof Error ? loadError.message : 'Цель сохранена, но список не обновился') }
-    finally { setSavingGoal(false) }
   }
   const updateGoal = async () => {
     const goal = goals.find((candidate) => candidate.id === editingGoalId)
@@ -573,70 +483,41 @@ export function TrackerApp() {
       date < (dateRange.startDate ?? cycleStart) || date > (dateRange.endDate ?? dateWithOffset(cycleStart, 83))
     ))
     if (datedItemOutsideRange) { setGoalFormError('Дата пункта должна быть в пределах периода цели'); return }
-    const supabase = createClient()
-    if (!supabase || !userId) return
     setSavingGoal(true); setGoalFormError('')
-
-    const { error: goalError } = await supabase.from('goals').update({ title, category: newGoalCategory, start_date: dateRange.startDate, end_date: dateRange.endDate }).eq('id', goal.id)
-    if (goalError) { setGoalFormError(goalError.message); setSavingGoal(false); return }
-
-    let childError: { message: string } | null = null
-    if (goal.type === 'recurring') {
-      const rangeStart = dateRange.startDate ?? cycleStart
-      const rangeEnd = dateRange.endDate ?? dateWithOffset(cycleStart, 83)
-      const desiredDates = recurringDates(selectedDays, rangeStart, rangeEnd)
-      const desiredDateSet = new Set(desiredDates)
-      const occurrenceByDate = new Map(goal.goal_occurrences.map((occurrence) => [occurrence.scheduled_date, occurrence]))
-      const removedIds = goal.goal_occurrences
-        .filter((occurrence) => !desiredDateSet.has(occurrence.scheduled_date))
-        .map((occurrence) => occurrence.id)
-      if (removedIds.length) childError = (await supabase.from('goal_occurrences').delete().in('id', removedIds)).error
-      if (!childError) {
-        const added = desiredDates
-          .filter((date) => !occurrenceByDate.has(date))
-          .map((date) => ({ goal_id: goal.id, scheduled_date: date }))
-        if (added.length) childError = (await supabase.from('goal_occurrences').insert(added)).error
-      }
-    } else {
-      const drafts = newGoalItems
-        .map((item, index) => ({ id: goalItemIds[index] ?? null, title: item.trim(), scheduled_date: newGoalItemDates[index] ?? null }))
-        .filter((item) => item.title)
-      const existingItems = [...goal.goal_items].sort((a, b) => a.sort_order - b.sort_order)
-      const retained = drafts.filter((item): item is { id: string; title: string; scheduled_date: string | null } => Boolean(item.id))
-      const updateResults = await Promise.all(retained.map((item, index) => (
-        supabase.from('goal_items').update({ title: item.title, scheduled_date: item.scheduled_date, sort_order: index }).eq('id', item.id)
-      )))
-      childError = updateResults.find((result) => result.error)?.error ?? null
-      const addedDrafts = drafts.filter((item) => !item.id)
-      if (!childError && addedDrafts.length) {
-        const added = addedDrafts.map((item, index) => ({
-          goal_id: goal.id,
-          title: item.title,
-          scheduled_date: item.scheduled_date,
-          sort_order: retained.length + index,
-        }))
-        childError = (await supabase.from('goal_items').insert(added)).error
-      }
-      const retainedIds = new Set(retained.map((item) => item.id))
-      const removedIds = existingItems.filter((item) => !retainedIds.has(item.id)).map((item) => item.id)
-      if (!childError && removedIds.length) {
-        childError = (await supabase.from('goal_items').delete().in('id', removedIds)).error
-      }
+    const rangeStart = dateRange.startDate ?? cycleStart
+    const rangeEnd = dateRange.endDate ?? dateWithOffset(cycleStart, 83)
+    const drafts = newGoalItems
+      .map((item, index) => ({ id: goalItemIds[index] ?? null, title: item.trim(), scheduledDate: newGoalItemDates[index] ?? null }))
+      .filter((item) => item.title)
+    try {
+      await updateGoalRecord({
+        id: goal.id,
+        type: goal.type,
+        title,
+        category: newGoalCategory,
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+        occurrenceDates: goal.type === 'recurring' ? recurringDates(selectedDays, rangeStart, rangeEnd) : [],
+        existingOccurrences: goal.goal_occurrences,
+        items: goal.type === 'recurring' ? [] : drafts,
+        existingItems: goal.goal_items,
+      })
+      await loadGoals()
+      closeGoalDialog()
+    } catch (error) {
+      setGoalFormError(error instanceof Error ? error.message : 'Не удалось сохранить цель')
+      await loadGoals().catch(() => undefined)
+    } finally {
+      setSavingGoal(false)
     }
-
-    if (childError) { setGoalFormError(childError.message); setSavingGoal(false); await loadGoals().catch(() => undefined); return }
-    try { await loadGoals(); closeGoalDialog() }
-    catch (loadError) { setMessage(loadError instanceof Error ? loadError.message : 'Цель сохранена, но список не обновился') }
-    finally { setSavingGoal(false) }
   }
   const deleteGoal = async () => {
     if (!editingGoalId) return
-    const supabase = createClient()
-    if (!supabase || !userId) return
     setDeletingGoal(true); setGoalFormError('')
-    const { error } = await supabase.from('goals').delete().eq('id', editingGoalId)
-    if (error) {
-      setGoalFormError(error.message)
+    try {
+      await deleteGoalRecord(editingGoalId)
+    } catch (error) {
+      setGoalFormError(error instanceof Error ? error.message : 'Не удалось удалить цель')
       setDeleteConfirmOpen(false)
       setDeletingGoal(false)
       return
@@ -648,16 +529,22 @@ export function TrackerApp() {
   const updateItem = async (item: GoalItem, checked: boolean) => {
     const completedAt = checked ? new Date().toISOString() : null
     setGoals((current) => current.map((goal) => ({ ...goal, goal_items: goal.goal_items.map((candidate) => candidate.id === item.id ? { ...candidate, completed_at: completedAt } : candidate) })))
-    const supabase = createClient()
-    const { error } = supabase ? await supabase.from('goal_items').update({ completed_at: completedAt }).eq('id', item.id) : { error: new Error('Supabase не настроен') }
-    if (error) { setMessage('Не удалось сохранить пункт'); await loadGoals().catch(() => undefined) }
+    try {
+      await setItemCompleted(item.id, completedAt)
+    } catch {
+      setMessage('Не удалось сохранить пункт')
+      await loadGoals().catch(() => undefined)
+    }
   }
   const updateOccurrence = async (occurrence: GoalOccurrence, checked: boolean) => {
     const completedAt = checked ? new Date().toISOString() : null
     setGoals((current) => current.map((goal) => ({ ...goal, goal_occurrences: goal.goal_occurrences.map((candidate) => candidate.id === occurrence.id ? { ...candidate, completed_at: completedAt } : candidate) })))
-    const supabase = createClient()
-    const { error } = supabase ? await supabase.from('goal_occurrences').update({ completed_at: completedAt }).eq('id', occurrence.id) : { error: new Error('Supabase не настроен') }
-    if (error) { setMessage('Не удалось сохранить повторение'); await loadGoals().catch(() => undefined) }
+    try {
+      await setOccurrenceCompleted(occurrence.id, completedAt)
+    } catch {
+      setMessage('Не удалось сохранить повторение')
+      await loadGoals().catch(() => undefined)
+    }
   }
   const togglePrimaryGoal = async (goalId: string) => {
     const goal = goals.find((candidate) => candidate.id === goalId)
@@ -667,27 +554,12 @@ export function TrackerApp() {
     setGoals((current) => current.map((candidate) => (
       candidate.id === goalId ? { ...candidate, tone: makePrimary ? 'violet' : 'accent' } : candidate
     )))
-    const supabase = createClient()
-    if (!supabase) { setGoals(previous); return }
-    const results = [await supabase.from('goals').update({ tone: makePrimary ? 'violet' : 'accent' }).eq('id', goalId)]
-    if (results.some((result) => result.error)) {
+    try {
+      await setGoalTone(goalId, makePrimary ? 'violet' : 'accent')
+    } catch {
       setGoals(previous)
       setMessage('Не удалось сохранить главную задачу')
     }
-  }
-
-  const signOut = async () => {
-    const supabase = createClient()
-    if (!supabase) return
-    await supabase.auth.signOut()
-    setUserId(null)
-    setGoals([])
-    setAuthMode('signin')
-    setAuthRequired(true)
-  }
-
-  if (authRequired && !loading) {
-    return <AuthScreen initialMode={authMode} onAuthenticated={() => { setLoading(true); setAuthRequired(false); setAuthVersion((version) => version + 1) }} />
   }
 
   return (
@@ -699,7 +571,7 @@ export function TrackerApp() {
       }}
     >
     <main className="prototype-host">
-      <Stage width={1600} height={1000} theme={theme} fidelity="realistic" ground={theme === 'glass' ? 'orbs' : undefined} className="tracker-stage">
+      <Stage width={1600} height={1000} theme={theme} fidelity="realistic" className="tracker-stage">
         {() => (
           <div className="tracker-product">
             <aside className="tracker-sidebar">
@@ -716,7 +588,6 @@ export function TrackerApp() {
                 <Meter value={cycleProgress / 100} />
                 <small>{goals.length} {goals.length === 1 ? 'цель' : 'целей'}</small>
               </Card>
-              <Button className="sidebar-signout" variant="ghost" icon={<Icon name="user" size={15} />} onClick={() => void signOut()}>Выйти</Button>
             </aside>
             <section className="tracker-main">
               <header className="tracker-header">
@@ -725,7 +596,7 @@ export function TrackerApp() {
                   <Button variant="tertiary" icon={<Icon name="calendar" size={12} />} onClick={openCycleSettings}>{cycleRange}</Button>
                 </div>
                 <div className="tracker-actions">
-                  {message && <Badge tone="danger">Ошибка подключения</Badge>}
+                  {message && <Badge tone="danger">Ошибка</Badge>}
                   <Select value={theme} options={themeOptions} onChange={changeTheme} ariaLabel="Тема интерфейса" />
                   <Button size="large" variant="primary" icon={<Icon name="plus" size={15} />} onClick={openCreateGoal}>Добавить цель</Button>
                 </div>
@@ -742,9 +613,9 @@ export function TrackerApp() {
                     <Button className="week-switcher__arrow" variant="ghost" aria-label="Следующая неделя" onClick={() => selectWeek(selectedWeek + 1)}><Icon name="chevron-right" size={15} /></Button>
                   </div>
                   {loading ? (
-                    <Card className="tracker-state" tone="sunken"><Spinner /><strong>Загружаем данные из Supabase</strong></Card>
-                  ) : message && !userId ? (
-                    <Card className="tracker-state" tone="sunken"><Icon name="gear" size={22} /><strong>Supabase пока не подключён</strong><small>{message}</small></Card>
+                    <Card className="tracker-state" tone="sunken"><Spinner /><strong>Загружаем данные</strong></Card>
+                  ) : message && !goals.length ? (
+                    <Card className="tracker-state" tone="sunken"><Icon name="gear" size={22} /><strong>Не удалось открыть данные</strong><small>{message}</small></Card>
                   ) : weekGoals.length ? (
                     <Gantt columns={weekColumns} cornerLabel="Цели недели" rows={ganttRows} selectedWeek={selectedDay} onWeekSelect={setSelectedDay} onRowSelect={(row) => setSelectedDay(row.startWeek)} onTogglePrimary={(row) => void togglePrimaryGoal(row.id)} />
                   ) : (
