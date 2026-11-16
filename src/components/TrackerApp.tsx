@@ -13,7 +13,7 @@ import { StarMark } from '@/shared/stageshow/kit/parts/StarMark'
 import type { Goal, GoalItem, GoalOccurrence, GoalType } from '@/types/database'
 import {
   createGoalRecord, deleteGoalRecord, loadStoredGoals, loadTracker, saveGoalOrder, saveTheme, setGoalTone,
-  setItemCompleted, setOccurrenceCompleted, shiftCycle, updateGoalRecord, type AppTheme,
+  setItemCompleted, setOccurrenceCompleted, shiftCycle, updateGoalOccurrencesForWeek, updateGoalRecord, type AppTheme,
 } from '@/lib/tracker-db'
 import './TrackerApp.css'
 
@@ -163,6 +163,14 @@ function recurringDates(selectedDays: number[], startIso: string, endIso: string
   }
   return dates
 }
+function recurringPatternDays(occurrences: GoalOccurrence[]) {
+  const counts = dayLabels.map((_, index) => occurrences.filter((occurrence) => (
+    (dateFromIso(occurrence.scheduled_date).getUTCDay() + 6) % 7 === index
+  )).length)
+  const maximum = Math.max(...counts)
+  const patternThreshold = maximum === 1 ? 1 : Math.max(2, Math.ceil(maximum / 2))
+  return counts.map((count) => maximum > 0 && count >= patternThreshold)
+}
 type GoalUnit = GoalItem | GoalOccurrence
 
 function goalUnits(goal: Goal): GoalUnit[] {
@@ -255,6 +263,10 @@ export function TrackerApp() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deletingGoal, setDeletingGoal] = useState(false)
   const [draftDragIndex, setDraftDragIndex] = useState<number | null>(null)
+  const [weekScheduleGoalId, setWeekScheduleGoalId] = useState<string | null>(null)
+  const [weekScheduleDays, setWeekScheduleDays] = useState([false, false, false, false, false, false, false])
+  const [weekScheduleError, setWeekScheduleError] = useState('')
+  const [savingWeekSchedule, setSavingWeekSchedule] = useState(false)
 
   const loadGoals = useCallback(async () => {
     const data = await loadStoredGoals()
@@ -411,9 +423,7 @@ export function TrackerApp() {
     setNewGoalItems(goal.type === 'recurring' ? [''] : sortedItems.length ? sortedItems.map((item) => item.title) : [''])
     setNewGoalItemDates(goal.type === 'recurring' ? [null] : sortedItems.length ? sortedItems.map((item) => item.scheduled_date) : [null])
     setGoalItemIds(goal.type === 'recurring' ? [null] : sortedItems.length ? sortedItems.map((item) => item.id) : [null])
-    setNewGoalDays(dayLabels.map((_, index) => goal.goal_occurrences.some((occurrence) => (
-      (dateFromIso(occurrence.scheduled_date).getUTCDay() + 6) % 7 === index
-    ))))
+    setNewGoalDays(recurringPatternDays(goal.goal_occurrences))
     setGoalFormError('')
     setDialogOpen(true)
   }
@@ -550,6 +560,44 @@ export function TrackerApp() {
     } catch {
       setMessage('Не удалось сохранить повторение')
       await loadGoals().catch(() => undefined)
+    }
+  }
+  const openWeekScheduleEditor = (goal: Goal) => {
+    const occurrences = goal.goal_occurrences.filter((occurrence) => (
+      occurrence.scheduled_date >= selectedWeekStart && occurrence.scheduled_date <= selectedWeekEnd
+    ))
+    setWeekScheduleGoalId(goal.id)
+    setWeekScheduleDays(dayLabels.map((_, index) => occurrences.some((occurrence) => (
+      occurrence.scheduled_date === dateWithOffset(selectedWeekStart, index)
+    ))))
+    setWeekScheduleError('')
+  }
+  const closeWeekScheduleEditor = () => {
+    if (savingWeekSchedule) return
+    setWeekScheduleGoalId(null)
+    setWeekScheduleError('')
+  }
+  const saveWeekSchedule = async () => {
+    const goal = goals.find((candidate) => candidate.id === weekScheduleGoalId)
+    if (!goal) { setWeekScheduleError('Цель не найдена'); return }
+    const scheduledDates = weekScheduleDays.flatMap((selected, index) => selected ? [dateWithOffset(selectedWeekStart, index)] : [])
+    if (!scheduledDates.length) { setWeekScheduleError('Выберите хотя бы один день'); return }
+    setSavingWeekSchedule(true)
+    setWeekScheduleError('')
+    try {
+      await updateGoalOccurrencesForWeek({
+        goalId: goal.id,
+        weekStart: selectedWeekStart,
+        weekEnd: selectedWeekEnd,
+        scheduledDates,
+      })
+      await loadGoals()
+      setWeekScheduleGoalId(null)
+    } catch (error) {
+      setWeekScheduleError(error instanceof Error ? error.message : 'Не удалось изменить дни недели')
+      await loadGoals().catch(() => undefined)
+    } finally {
+      setSavingWeekSchedule(false)
     }
   }
   const togglePrimaryGoal = async (goalId: string) => {
@@ -704,6 +752,7 @@ export function TrackerApp() {
                           <div className="goal-card__actions">
                             <PrimaryStar active={primary} title={goal.title} onClick={() => void togglePrimaryGoal(goal.id)} />
                             <Badge tone={goalOverdue ? 'danger' : goalCompleted ? 'success' : 'accent'}>{progress}%</Badge>
+                            <Button variant="ghost" className="goal-card__edit" aria-label={`Изменить дни этой недели для цели ${goal.title}`} title="Изменить дни этой недели" onClick={() => openWeekScheduleEditor(goal)}><Icon name="calendar" size={15} /></Button>
                             <Button variant="ghost" className="goal-card__edit" aria-label={`Редактировать цель ${goal.title}`} onClick={() => openGoalEditor(goal)}><Icon name="edit" size={15} /></Button>
                           </div>
                         </div>
@@ -832,6 +881,30 @@ export function TrackerApp() {
                 )}
                 {goalFormError && <Badge tone="danger">{goalFormError}</Badge>}
               </section></div>
+            </Dialog>
+
+            <Dialog
+              open={Boolean(weekScheduleGoalId)}
+              title="Дни на этой неделе"
+              subtitle={`${goals.find((goal) => goal.id === weekScheduleGoalId)?.title ?? ''} · ${weekTitle}`}
+              onClose={closeWeekScheduleEditor}
+              footer={<>
+                <Button size="large" onClick={closeWeekScheduleEditor}>Отмена</Button>
+                <Button size="large" variant="primary" onClick={() => void saveWeekSchedule()}>{savingWeekSchedule ? 'Сохраняем…' : 'Сохранить только эту неделю'}</Button>
+              </>}
+            >
+              <div className="week-schedule-editor">
+                <p>Добавьте, уберите или перенесите дни. Расписание остальных недель не изменится.</p>
+                <div className="dialog-days">
+                  {dayLabels.map((day, index) => {
+                    const date = dateWithOffset(selectedWeekStart, index)
+                    const goal = goals.find((candidate) => candidate.id === weekScheduleGoalId)
+                    const allowed = !goal || ((!goal.start_date || date >= goal.start_date) && (!goal.end_date || date <= goal.end_date))
+                    return <Checkbox key={day} variant="tile" disabled={!allowed} checked={weekScheduleDays[index]} label={day} onChange={(checked) => setWeekScheduleDays((days) => days.map((value, dayIndex) => dayIndex === index ? checked : value))} />
+                  })}
+                </div>
+                {weekScheduleError && <Badge tone="danger">{weekScheduleError}</Badge>}
+              </div>
             </Dialog>
 
             <Dialog open={cycleSettingsOpen} className="cycle-settings-dialog" title="Дата первой недели" subtitle="Все даты 12 недель будут рассчитаны от этой даты" onClose={() => setCycleSettingsOpen(false)} footer={<><Button size="large" onClick={() => setCycleSettingsOpen(false)}>Отмена</Button><Button size="large" variant="primary" onClick={() => void saveCycleSettings()}>Сохранить</Button></>}>

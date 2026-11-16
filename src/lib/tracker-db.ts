@@ -332,6 +332,45 @@ export async function setOccurrenceCompleted(id: string, completedAt: string | n
   await database.execute('update goal_occurrences set completed_at = $1, updated_at = $2 where id = $3', [completedAt, nowIso(), id])
 }
 
+export async function updateGoalOccurrencesForWeek(input: {
+  goalId: string
+  weekStart: string
+  weekEnd: string
+  scheduledDates: string[]
+}) {
+  const database = await getDatabase()
+  const timestamp = nowIso()
+  const existing = await database.select<GoalOccurrence[]>(
+    `select id, goal_id, scheduled_date, completed_at, created_at, updated_at
+     from goal_occurrences
+     where goal_id = $1 and scheduled_date between $2 and $3`,
+    [input.goalId, input.weekStart, input.weekEnd],
+  )
+  const desired = new Set(input.scheduledDates)
+  const existingByDate = new Map(existing.map((occurrence) => [occurrence.scheduled_date, occurrence]))
+
+  await database.execute('BEGIN')
+  try {
+    for (const occurrence of existing) {
+      if (!desired.has(occurrence.scheduled_date)) {
+        await database.execute('delete from goal_occurrences where id = $1', [occurrence.id])
+      }
+    }
+    for (const scheduledDate of desired) {
+      if (existingByDate.has(scheduledDate)) continue
+      await database.execute(
+        `insert into goal_occurrences (id, goal_id, scheduled_date, created_at, updated_at)
+         values ($1, $2, $3, $4, $4)`,
+        [crypto.randomUUID(), input.goalId, scheduledDate, timestamp],
+      )
+    }
+    await database.execute('COMMIT')
+  } catch (error) {
+    await database.execute('ROLLBACK')
+    throw error
+  }
+}
+
 export async function setGoalTone(id: string, tone: GoalTone) {
   const database = await getDatabase()
   await database.execute('update goals set tone = $1, updated_at = $2 where id = $3', [tone, nowIso(), id])

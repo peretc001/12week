@@ -98,6 +98,10 @@
 .date-field .ant-picker-input > input::placeholder, .date-field .ant-picker-suffix { color: var(--ss-text-faint); }
 .recurring-settings, .type-settings-card { margin-top: 18px; }
 .dialog-days { margin-bottom: 14px; }
+.week-schedule-editor { display: grid; gap: 14px; }
+.week-schedule-editor p { margin: 0; color: var(--ss-text); font-size: 12px; line-height: 1.5; }
+.week-schedule-editor .dialog-days { margin-bottom: 0; }
+.week-schedule-editor > .ss-badge { justify-self: start; }
 .type-settings-card .ss-row + .ss-row { border-top: 1px solid var(--ss-line-faint); }
 .goal-items-editor { display: grid; gap: 12px; }
 .goal-item-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto 30px; align-items: end; gap: 8px; }
