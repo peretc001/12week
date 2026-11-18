@@ -252,6 +252,7 @@ export function TrackerApp() {
   }
   const [selectedWeek, setSelectedWeek] = useState(1)
   const [selectedDay, setSelectedDay] = useState(1)
+  const weekPanelRef = useRef<HTMLElement>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null)
   const [cycleSettingsOpen, setCycleSettingsOpen] = useState(false)
@@ -283,6 +284,18 @@ export function TrackerApp() {
   const [weekScheduleDays, setWeekScheduleDays] = useState([false, false, false, false, false, false, false])
   const [weekScheduleError, setWeekScheduleError] = useState('')
   const [savingWeekSchedule, setSavingWeekSchedule] = useState(false)
+
+  function selectGanttGoal(row: GanttRow) {
+    setSelectedDay(row.startWeek)
+
+    const panel = weekPanelRef.current
+    const card = panel?.querySelector<HTMLElement>(`[data-goal-id="${CSS.escape(row.id)}"]`)
+    if (!panel || !card) return
+
+    const top = panel.scrollTop + card.getBoundingClientRect().top - panel.getBoundingClientRect().top - 14
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    panel.scrollTo({ top, behavior: reduceMotion ? 'instant' : 'smooth' })
+  }
 
   const loadGoals = useCallback(async () => {
     const data = await loadStoredGoals()
@@ -737,12 +750,12 @@ export function TrackerApp() {
                   ) : message && !goals.length ? (
                     <Card className="tracker-state" tone="sunken"><Icon name="gear" size={22} /><strong>Не удалось открыть данные</strong><small>{message}</small></Card>
                   ) : weekGoals.length ? (
-                    <Gantt columns={weekColumns} cornerLabel="Цели недели" rows={ganttRows} selectedWeek={selectedDay} onWeekSelect={setSelectedDay} onRowSelect={(row) => setSelectedDay(row.startWeek)} onTogglePrimary={(row) => void togglePrimaryGoal(row.id)} onReorder={(from, to) => void reorderWeekGoals(from, to)} />
+                    <Gantt columns={weekColumns} cornerLabel="Цели недели" rows={ganttRows} selectedWeek={selectedDay} onWeekSelect={setSelectedDay} onRowSelect={selectGanttGoal} onTogglePrimary={(row) => void togglePrimaryGoal(row.id)} onReorder={(from, to) => void reorderWeekGoals(from, to)} />
                   ) : (
                     <Card className="tracker-state" tone="sunken"><Icon name="calendar" size={22} /><strong>Неделя пока пустая</strong><small>Добавьте первую цель на эту неделю.</small><Button size="large" variant="primary" icon={<Icon name="plus" size={15} />} onClick={openCreateGoal}>Добавить цель</Button></Card>
                   )}
                 </section>
-                <aside className="week-panel">
+                <aside className="week-panel" ref={weekPanelRef}>
                 {calendarError && <div className="tracker-calendar-error" role="alert">{calendarError}</div>}
                   <div className="week-panel__head"><div><span className="micro-label">План недели</span><div className="week-title"><span>Неделя {selectedWeek}</span><span className="ss-button week-date" data-variant="tertiary" data-size="medium"><span className="ss-button__icon"><Icon name="calendar" size={12} /></span><span className="ss-button__label">{weekLabels[selectedWeek - 1]}</span></span></div></div></div>
                   <Card className="week-progress-card" tone="sunken">
@@ -762,7 +775,7 @@ export function TrackerApp() {
                     const cardClass = `goal-card${goalOverdue ? ' goal-card--overdue' : ''}${primary ? ' goal-card--primary' : ''}`
                     const iconClass = `goal-card__icon${primary ? ' goal-card__icon--primary' : goalOverdue ? ' goal-card__icon--danger' : goalCompleted ? ' goal-card__icon--teal' : ''}`
                     if (goal.type === 'recurring') return (
-                      <Card className={cardClass} pad="large" key={goal.id}>
+                      <Card className={cardClass} pad="large" key={goal.id} data-goal-id={goal.id}>
                         <div className="goal-card__head">
                           <span className={iconClass}><Icon name="bolt" size={17} filled /></span>
                           <div><strong>{goal.title}</strong><small className={goalOverdue ? 'goal-card__overdue' : undefined}>{category} · {goalOverdue ? 'Просрочено · ' : ''}{completedCount} из {visibleOccurrences.length}</small></div>
@@ -787,7 +800,7 @@ export function TrackerApp() {
                       </Card>
                     )
                     return (
-                      <Card className={cardClass} pad="large" key={goal.id}>
+                      <Card className={cardClass} pad="large" key={goal.id} data-goal-id={goal.id}>
                         <div className="goal-card__head">
                           <span className={iconClass}><Icon name={goal.type === 'structured' ? 'grip' : 'check'} size={17} /></span>
                           <div><strong>{goal.title}</strong><small className={goalOverdue ? 'goal-card__overdue' : undefined}>{category} · {goalOverdue ? 'Просрочено · ' : ''}{completedCount} из {goal.goal_items.length}</small></div>
