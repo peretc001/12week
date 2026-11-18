@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { ConfigProvider, DatePicker, theme as antdTheme } from 'antd'
 import ruRU from 'antd/locale/ru_RU'
 import dayjs from 'dayjs'
+import { CalendarPlus } from 'lucide-react'
+import { addToCalendar } from '@/lib/calendar'
 import 'dayjs/locale/ru'
 import {
   Badge, Button, Card, Checkbox, Dialog, Field, Gantt, Icon, Meter, Row,
@@ -234,6 +236,20 @@ export function TrackerApp() {
   const [goals, setGoals] = useState<Goal[]>([])
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
+  const [calendarError, setCalendarError] = useState('')
+  const [openingCalendar, setOpeningCalendar] = useState(false)
+
+  async function openCalendar(events: Parameters<typeof addToCalendar>[0]) {
+    setCalendarError('')
+    setOpeningCalendar(true)
+    try {
+      await addToCalendar(events)
+    } catch {
+      setCalendarError('Не удалось открыть календарь. Попробуйте ещё раз.')
+    } finally {
+      setOpeningCalendar(false)
+    }
+  }
   const [selectedWeek, setSelectedWeek] = useState(1)
   const [selectedDay, setSelectedDay] = useState(1)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -727,6 +743,7 @@ export function TrackerApp() {
                   )}
                 </section>
                 <aside className="week-panel">
+                {calendarError && <div className="tracker-calendar-error" role="alert">{calendarError}</div>}
                   <div className="week-panel__head"><div><span className="micro-label">План недели</span><div className="week-title"><span>Неделя {selectedWeek}</span><span className="ss-button week-date" data-variant="tertiary" data-size="medium"><span className="ss-button__icon"><Icon name="calendar" size={12} /></span><span className="ss-button__label">{weekLabels[selectedWeek - 1]}</span></span></div></div></div>
                   <Card className="week-progress-card" tone="sunken">
                     <div className="week-progress-card__line"><span>{completedGoals} из {weekGoals.length} выполнено</span><strong>{weekProgress}%</strong></div>
@@ -752,6 +769,11 @@ export function TrackerApp() {
                           <div className="goal-card__actions">
                             <PrimaryStar active={primary} title={goal.title} onClick={() => void togglePrimaryGoal(goal.id)} />
                             <Badge tone={goalOverdue ? 'danger' : goalCompleted ? 'success' : 'accent'}>{progress}%</Badge>
+                            {visibleOccurrences.length > 0 && (
+                              <button type="button" className="ss-button goal-card__edit" data-variant="ghost" data-size="medium" title="Добавить дни недели в календарь" aria-label={`Добавить дни недели в календарь для цели ${goal.title}`} disabled={openingCalendar} onClick={() => void openCalendar(visibleOccurrences.map((occurrence) => ({ id: occurrence.id, title: goal.title, date: occurrence.scheduled_date })))}>
+                                <CalendarPlus size={15} aria-hidden="true" />
+                              </button>
+                            )}
                             <Button variant="ghost" className="goal-card__edit" aria-label={`Изменить дни этой недели для цели ${goal.title}`} title="Изменить дни этой недели" onClick={() => openWeekScheduleEditor(goal)}><Icon name="calendar" size={15} /></Button>
                             <Button variant="ghost" className="goal-card__edit" aria-label={`Редактировать цель ${goal.title}`} onClick={() => openGoalEditor(goal)}><Icon name="edit" size={15} /></Button>
                           </div>
@@ -777,12 +799,20 @@ export function TrackerApp() {
                         </div>
                         <div className="goal-card__items">
                           {goal.goal_items.length ? itemsInListOrder(goal.goal_items).map((item) => (
-                            <Checkbox
-                              key={item.id}
-                              checked={Boolean(item.completed_at)}
-                              label={<span className="goal-item-label"><span>{item.title}</span>{item.scheduled_date && <time dateTime={item.scheduled_date}>{formatShortDate(item.scheduled_date)}</time>}</span>}
-                              onChange={(checked) => void updateItem(item, checked)}
-                            />
+                            <div className="goal-item-row" key={item.id}>
+                              <Checkbox
+                                checked={Boolean(item.completed_at)}
+                                label={<span className="goal-item-label"><span>{item.title}</span>{item.scheduled_date && <time dateTime={item.scheduled_date}>{formatShortDate(item.scheduled_date)}</time>}</span>}
+                                onChange={(checked) => void updateItem(item, checked)}
+                              />
+                              {item.scheduled_date && (
+                                <button type="button" className="ss-button goal-card__edit" data-variant="ghost" data-size="medium" title="Добавить в календарь" aria-label={`Добавить в календарь: ${item.title}`} disabled={openingCalendar} onClick={() => {
+                                  if (item.scheduled_date) void openCalendar([{ id: item.id, title: item.title, date: item.scheduled_date }])
+                                }}>
+                                  <CalendarPlus size={15} aria-hidden="true" />
+                                </button>
+                              )}
+                            </div>
                           )) : <small className="goal-card__empty">У цели пока нет пунктов</small>}
                         </div>
                       </Card>
